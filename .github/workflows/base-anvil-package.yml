@@ -116,7 +116,7 @@ jobs:
         id: base-std
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.BASE_STD_TOKEN }}
+          GH_TOKEN: ${{ secrets.BASE_STD_TOKEN || github.token }}
         run: |
           set -euo pipefail
 
@@ -158,7 +158,7 @@ jobs:
         if: matrix.settings.smoke_test
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.BASE_STD_TOKEN }}
+          GH_TOKEN: ${{ secrets.BASE_STD_TOKEN || github.token }}
           BASE_STD_SHA: ${{ steps.base-std.outputs.sha }}
         run: |
           set -euo pipefail
