@@ -384,9 +384,9 @@ mod tests {
         assert_eq!(IB20Asset::IB20AssetCalls::NAME, "IB20AssetCalls");
     }
 
-    /// The exact selector set dialable at Cobalt (the 12 Beryl selectors plus the 11 ERC-8056
-    /// / compatibility selectors added for the scheduled-multiplier surface). Adding or removing one changes which calls historical
-    /// blocks could make.
+    /// The exact selector set dialable at Cobalt (the 12 Beryl selectors plus the 11
+    /// ERC-8056/compatibility selectors added for the scheduled-multiplier surface). Adding or
+    /// removing one changes which calls historical blocks could make.
     #[test]
     fn selector_set_is_frozen() {
         let mut selectors: Vec<[u8; 4]> = IB20Asset::IB20AssetCalls::selectors().collect();
