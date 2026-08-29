@@ -248,7 +248,7 @@ fn resolver_maps_forks_to_versions() {
     assert_eq!(AssetVersions::from_base_upgrade(BaseUpgrade::Cobalt), Some(AssetVersion::V2));
 }
 
-/// The 8 ERC-8056 scheduled-multiplier selectors were introduced at Cobalt (`AssetV2`). At V1
+/// The 11 ERC-8056 scheduled-multiplier selectors were introduced at Cobalt (`AssetV2`). At V1
 /// (Beryl) they are absent from the frozen asset wire surface, so `route` falls through to the
 /// disjoint inherited `IB20` decode and rejects them as `UnknownFunctionSelector`, byte-identically
 /// to the deleted hand-written fork gate.
@@ -256,13 +256,16 @@ fn resolver_maps_forks_to_versions() {
 fn golden_v2_selectors_unknown_at_v1() {
     let mut s = fresh();
     let calls: Vec<Vec<u8>> = vec![
+        IB20Asset::MAX_UI_MULTIPLIERCall {}.abi_encode(),
         IB20Asset::uiMultiplierCall {}.abi_encode(),
         IB20Asset::newUIMultiplierCall {}.abi_encode(),
         IB20Asset::effectiveAtCall {}.abi_encode(),
         IB20Asset::balanceOfUICall { account: ALICE }.abi_encode(),
         IB20Asset::totalSupplyUICall {}.abi_encode(),
-        IB20Asset::setUIMultiplierCall { newMultiplier: u(2), effectiveAt: u(1) }.abi_encode(),
-        IB20Asset::cancelScheduledMultiplierCall {}.abi_encode(),
+        IB20Asset::toUIAmountCall { rawAmount: u(2) }.abi_encode(),
+        IB20Asset::fromUIAmountCall { uiAmount: u(2) }.abi_encode(),
+        IB20Asset::updateUIMultiplierCall { newMultiplier: u(2), effectiveAt: u(1) }.abi_encode(),
+        IB20Asset::cancelUIMultiplierUpdateCall {}.abi_encode(),
         IB20Asset::supportsInterfaceCall {
             interfaceId: alloy_primitives::FixedBytes::new([0x01, 0xff, 0xc9, 0xa7]),
         }
@@ -2903,13 +2906,16 @@ fn v1_op_coverage_checklist(call: IB20::IB20Calls, ext: IB20Asset::IB20AssetCall
         // ERC-8056 scheduled-multiplier surface: introduced at V2 (Cobalt). The frozen V1 (Beryl)
         // wire surface does not declare these selectors, so they stay unknown at V1; V2 behavior is
         // cross-validated by the base-std suite in live-precompile mode.
-        SC::uiMultiplier(_)
+        SC::MAX_UI_MULTIPLIER(_)
+        | SC::uiMultiplier(_)
         | SC::newUIMultiplier(_)
         | SC::effectiveAt(_)
         | SC::balanceOfUI(_)
         | SC::totalSupplyUI(_)
-        | SC::setUIMultiplier(_)
-        | SC::cancelScheduledMultiplier(_)
+        | SC::toUIAmount(_)
+        | SC::fromUIAmount(_)
+        | SC::updateUIMultiplier(_)
+        | SC::cancelUIMultiplierUpdate(_)
         | SC::supportsInterface(_) => covered(&[golden_v2_selectors_unknown_at_v1]),
     }
 }

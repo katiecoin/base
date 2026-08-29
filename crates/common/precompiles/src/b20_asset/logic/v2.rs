@@ -3,10 +3,10 @@
 //! V2 is a self-contained copy of the frozen V1 behavior that adds the ERC-8056 "Scaled UI
 //! Amount" scheduled-multiplier surface: the current multiplier becomes *lazy* (it flips to a
 //! matured pending target on read), a pending update can be scheduled and cancelled, the instant
-//! `update_multiplier` failsafe is rewired to clear the pending slot and emit the ERC-8056 events,
-//! and ERC-165 / ERC-8056 aliases are advertised. Every method that does not change carries V1's
-//! verbatim body (V2 does not call into V1); storage is append-only, so a token created under V1
-//! upgrades in place with no migration.
+//! `update_multiplier` failsafe is rewired to clear the pending slot and emit both the legacy and
+//! ERC-8056 events, and ERC-165 / ERC-8056 aliases are advertised. Every method that does not
+//! change carries V1's verbatim body (V2 does not call into V1); storage is append-only, so a
+//! token created under V1 upgrades in place with no migration.
 
 use alloc::{
     string::{String, ToString},
@@ -32,7 +32,7 @@ const DOMAIN_TYPEHASH: B256 =
 const VERSION: &[u8] = b"1";
 
 /// Second asset B-20 implementation. Activated at Cobalt; adds the ERC-8056 scheduled-multiplier
-/// surface (lazy multiplier, `setUIMultiplier`/`cancelScheduledMultiplier`, ERC-165) on top of a
+/// surface (lazy multiplier, `updateUIMultiplier`/`cancelUIMultiplierUpdate`, ERC-165) on top of a
 /// self-contained copy of the frozen V1 behavior.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct AssetV2;
@@ -698,8 +698,8 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
     // --- Asset-specific mutations ---
 
     /// Instantaneous failsafe. Writes the current multiplier immediately, clearing any pending
-    /// update and (for a still-live schedule) emitting `MultiplierUpdateCancelled`. Emits the
-    /// ERC-8056 `UIMultiplierUpdated` event rather than V1's `MultiplierUpdated`.
+    /// update and (for a still-live schedule) emitting `UIMultiplierUpdateCancelled`. Emits both
+    /// the legacy `MultiplierUpdated` and the ERC-8056 `UIMultiplierUpdated`.
     fn update_multiplier(
         &self,
         token: &mut B20AssetToken<S, A>,
@@ -723,13 +723,16 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
         }
         if live_pending {
             token.accounting_mut().emit_event(
-                IB20Asset::MultiplierUpdateCancelled {
+                IB20Asset::UIMultiplierUpdateCancelled {
                     cancelledMultiplier: pending_multiplier,
                     cancelledEffectiveAt: pending_effective_at,
                 }
                 .encode_log_data(),
             )?;
         }
+        token.accounting_mut().emit_event(
+            IB20Asset::MultiplierUpdated { multiplier: new_multiplier }.encode_log_data(),
+        )?;
         token.accounting_mut().emit_event(
             IB20Asset::UIMultiplierUpdated {
                 oldMultiplier: old,
@@ -893,6 +896,10 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
 
     // --- ERC-8056 scheduled multiplier (introduced at AssetV2, Cobalt) ---
 
+    fn max_ui_multiplier(&self) -> Result<U256> {
+        Ok(U256::from(u128::MAX))
+    }
+
     /// Lazy current multiplier: flips to a matured pending target once `now >= effectiveAt`.
     fn multiplier(&self, token: &B20AssetToken<S, A>) -> Result<U256> {
         self.effective_multiplier(token)
@@ -940,7 +947,15 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
         Ok(product / B20AssetStorage::WAD)
     }
 
-    fn set_ui_multiplier(
+    fn to_ui_amount(&self, token: &B20AssetToken<S, A>, raw_amount: U256) -> Result<U256> {
+        self.to_scaled_balance(token, raw_amount)
+    }
+
+    fn from_ui_amount(&self, token: &B20AssetToken<S, A>, ui_amount: U256) -> Result<U256> {
+        self.to_raw_balance(token, ui_amount)
+    }
+
+    fn update_ui_multiplier(
         &self,
         token: &mut B20AssetToken<S, A>,
         caller: Address,
@@ -967,8 +982,8 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
         let pending_effective_at = token.accounting().pending_effective_at()?;
         // A live pending blocks a new schedule.
         if U256::from(pending_effective_at) > now {
-            return Err(BasePrecompileError::revert(IB20Asset::ScheduleOverlap {
-                pendingEffectiveAt: U256::from(pending_effective_at),
+            return Err(BasePrecompileError::revert(IB20Asset::UIMultiplierUpdateExists {
+                effectiveAt: U256::from(pending_effective_at),
             }));
         }
         // Fold a matured pending into the current multiplier before overwriting it.
@@ -992,7 +1007,7 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
         )
     }
 
-    fn cancel_scheduled_multiplier(
+    fn cancel_ui_multiplier_update(
         &self,
         token: &mut B20AssetToken<S, A>,
         caller: Address,
@@ -1004,11 +1019,11 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
         let pending_effective_at = U256::from(token.accounting().pending_effective_at()?);
         // A pending maturing at exactly `now` has already taken effect and is not cancellable.
         if pending_effective_at <= now {
-            return Err(BasePrecompileError::revert(IB20Asset::NoScheduledMultiplier {}));
+            return Err(BasePrecompileError::revert(IB20Asset::UIMultiplierUpdateDoesNotExist {}));
         }
         token.accounting_mut().clear_pending_multiplier_and_effective_at()?;
         token.accounting_mut().emit_event(
-            IB20Asset::MultiplierUpdateCancelled {
+            IB20Asset::UIMultiplierUpdateCancelled {
                 cancelledMultiplier: pending_multiplier,
                 cancelledEffectiveAt: pending_effective_at,
             }
@@ -2143,12 +2158,21 @@ mod tests {
     }
 
     #[test]
+    fn max_ui_multiplier_matches_uint128_max() {
+        assert_eq!(
+            <AssetV2 as Asset<FakeAccounting, FakePolicyAccounting>>::max_ui_multiplier(&LOGIC)
+                .unwrap(),
+            U256::from(u128::MAX)
+        );
+    }
+
+    #[test]
     fn multiplier_flips_lazily_at_effective_at_boundary() {
         let mut tok = token();
         let target = wad() * U256::from(3u64);
         let effective_at = U256::from(100u64);
         set_now(&mut tok, U256::from(10u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
 
         // T-1: still the old (current) multiplier.
         set_now(&mut tok, U256::from(99u64));
@@ -2164,12 +2188,12 @@ mod tests {
     }
 
     #[test]
-    fn set_ui_multiplier_emits_event_and_records_pending() {
+    fn update_ui_multiplier_emits_event_and_records_pending() {
         let mut tok = token();
         let target = wad() * U256::from(2u64);
         let effective_at = U256::from(500u64);
         set_now(&mut tok, U256::from(1u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
 
         assert_eq!(
             last_event(&tok),
@@ -2185,11 +2209,11 @@ mod tests {
     }
 
     #[test]
-    fn set_ui_multiplier_requires_operator_role() {
+    fn update_ui_multiplier_requires_operator_role() {
         let mut tok = token();
         set_now(&mut tok, U256::from(1u64));
         let err =
-            LOGIC.set_ui_multiplier(&mut tok, ALICE, wad(), U256::from(2u64), false).unwrap_err();
+            LOGIC.update_ui_multiplier(&mut tok, ALICE, wad(), U256::from(2u64), false).unwrap_err();
         assert_eq!(
             err,
             BasePrecompileError::revert(IB20::AccessControlUnauthorizedAccount {
@@ -2199,38 +2223,38 @@ mod tests {
         );
         // Once granted, the same call succeeds.
         grant(&mut tok, AssetV2::OPERATOR_ROLE, ALICE);
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, wad(), U256::from(2u64), false).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, wad(), U256::from(2u64), false).unwrap();
     }
 
     #[test]
-    fn set_ui_multiplier_rejects_zero_and_above_uint128() {
+    fn update_ui_multiplier_rejects_zero_and_above_uint128() {
         let mut tok = token();
         set_now(&mut tok, U256::from(1u64));
         let zero = LOGIC
-            .set_ui_multiplier(&mut tok, ALICE, U256::ZERO, U256::from(2u64), true)
+            .update_ui_multiplier(&mut tok, ALICE, U256::ZERO, U256::from(2u64), true)
             .unwrap_err();
         assert_eq!(zero, BasePrecompileError::revert(IB20Asset::InvalidMultiplier {}));
 
         let too_big = U256::from(u128::MAX) + U256::ONE;
         let over =
-            LOGIC.set_ui_multiplier(&mut tok, ALICE, too_big, U256::from(2u64), true).unwrap_err();
+            LOGIC.update_ui_multiplier(&mut tok, ALICE, too_big, U256::from(2u64), true).unwrap_err();
         assert_eq!(over, BasePrecompileError::revert(IB20Asset::InvalidMultiplier {}));
     }
 
     #[test]
-    fn set_ui_multiplier_rejects_effective_at_in_past_and_too_far() {
+    fn update_ui_multiplier_rejects_effective_at_in_past_and_too_far() {
         let mut tok = token();
         let now = U256::from(100u64);
         set_now(&mut tok, now);
         // effectiveAt == now is not in the future.
-        let past = LOGIC.set_ui_multiplier(&mut tok, ALICE, wad(), now, true).unwrap_err();
+        let past = LOGIC.update_ui_multiplier(&mut tok, ALICE, wad(), now, true).unwrap_err();
         assert_eq!(
             past,
             BasePrecompileError::revert(IB20Asset::EffectiveAtInPast { effectiveAt: now })
         );
 
         let too_far = U256::from(u64::MAX) + U256::ONE;
-        let far = LOGIC.set_ui_multiplier(&mut tok, ALICE, wad(), too_far, true).unwrap_err();
+        let far = LOGIC.update_ui_multiplier(&mut tok, ALICE, wad(), too_far, true).unwrap_err();
         assert_eq!(
             far,
             BasePrecompileError::revert(IB20Asset::EffectiveAtTooFar { effectiveAt: too_far })
@@ -2238,15 +2262,15 @@ mod tests {
     }
 
     #[test]
-    fn set_ui_multiplier_reverts_on_live_overlap() {
+    fn update_ui_multiplier_reverts_on_live_overlap() {
         let mut tok = token();
         let first_effective_at = U256::from(1_000u64);
         set_now(&mut tok, U256::from(1u64));
         LOGIC
-            .set_ui_multiplier(&mut tok, ALICE, wad() * U256::from(2u64), first_effective_at, true)
+            .update_ui_multiplier(&mut tok, ALICE, wad() * U256::from(2u64), first_effective_at, true)
             .unwrap();
         let err = LOGIC
-            .set_ui_multiplier(
+            .update_ui_multiplier(
                 &mut tok,
                 ALICE,
                 wad() * U256::from(3u64),
@@ -2256,19 +2280,19 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            BasePrecompileError::revert(IB20Asset::ScheduleOverlap {
-                pendingEffectiveAt: first_effective_at,
+            BasePrecompileError::revert(IB20Asset::UIMultiplierUpdateExists {
+                effectiveAt: first_effective_at,
             })
         );
     }
 
     #[test]
-    fn set_ui_multiplier_materializes_matured_pending() {
+    fn update_ui_multiplier_materializes_matured_pending() {
         let mut tok = token();
         let first = wad() * U256::from(2u64);
         let first_effective_at = U256::from(100u64);
         set_now(&mut tok, U256::from(1u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, first, first_effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, first, first_effective_at, true).unwrap();
 
         // After maturity, schedule a second: the matured first must fold into the current slot.
         let now = U256::from(150u64);
@@ -2276,7 +2300,7 @@ mod tests {
         assert_eq!(LOGIC.multiplier(&tok).unwrap(), first, "first has matured");
         let second = wad() * U256::from(3u64);
         let second_effective_at = U256::from(300u64);
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, second, second_effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, second, second_effective_at, true).unwrap();
 
         // `old` in the emitted event is the folded (matured) value, not the pre-fold WAD.
         assert_eq!(
@@ -2302,13 +2326,13 @@ mod tests {
         let target = wad() * U256::from(2u64);
         let effective_at = U256::from(1_000u64);
         set_now(&mut tok, U256::from(1u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
 
-        LOGIC.cancel_scheduled_multiplier(&mut tok, ALICE, true).unwrap();
+        LOGIC.cancel_ui_multiplier_update(&mut tok, ALICE, true).unwrap();
 
         assert_eq!(
             last_event(&tok),
-            IB20Asset::MultiplierUpdateCancelled {
+            IB20Asset::UIMultiplierUpdateCancelled {
                 cancelledMultiplier: target,
                 cancelledEffectiveAt: effective_at,
             }
@@ -2323,16 +2347,25 @@ mod tests {
     fn cancel_reverts_without_live_pending() {
         let mut tok = token();
         set_now(&mut tok, U256::from(1u64));
-        let none = LOGIC.cancel_scheduled_multiplier(&mut tok, ALICE, true).unwrap_err();
-        assert_eq!(none, BasePrecompileError::revert(IB20Asset::NoScheduledMultiplier {}));
+        let none = LOGIC.cancel_ui_multiplier_update(&mut tok, ALICE, true).unwrap_err();
+        assert_eq!(none, BasePrecompileError::revert(IB20Asset::UIMultiplierUpdateDoesNotExist {}));
 
         // A matured pending is no longer "live", so cancel still reverts.
         LOGIC
-            .set_ui_multiplier(&mut tok, ALICE, wad() * U256::from(2u64), U256::from(100u64), true)
+            .update_ui_multiplier(
+                &mut tok,
+                ALICE,
+                wad() * U256::from(2u64),
+                U256::from(100u64),
+                true,
+            )
             .unwrap();
         set_now(&mut tok, U256::from(100u64));
-        let matured = LOGIC.cancel_scheduled_multiplier(&mut tok, ALICE, true).unwrap_err();
-        assert_eq!(matured, BasePrecompileError::revert(IB20Asset::NoScheduledMultiplier {}));
+        let matured = LOGIC.cancel_ui_multiplier_update(&mut tok, ALICE, true).unwrap_err();
+        assert_eq!(
+            matured,
+            BasePrecompileError::revert(IB20Asset::UIMultiplierUpdateDoesNotExist {})
+        );
     }
 
     #[test]
@@ -2342,6 +2375,10 @@ mod tests {
         let target = wad() * U256::from(5u64);
         set_now(&mut tok, now);
         LOGIC.update_multiplier(&mut tok, ALICE, target, true).unwrap();
+        assert_eq!(
+            tok.accounting().events[tok.accounting().events.len() - 2],
+            IB20Asset::MultiplierUpdated { multiplier: target }.encode_log_data()
+        );
         assert_eq!(
             last_event(&tok),
             IB20Asset::UIMultiplierUpdated {
@@ -2360,7 +2397,7 @@ mod tests {
         let pending = wad() * U256::from(2u64);
         let pending_effective_at = U256::from(1_000u64);
         set_now(&mut tok, U256::from(1u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, pending, pending_effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, pending, pending_effective_at, true).unwrap();
 
         let now = U256::from(10u64);
         let instant = wad() * U256::from(5u64);
@@ -2369,12 +2406,16 @@ mod tests {
 
         let events = &tok.accounting().events;
         assert_eq!(
-            events[events.len() - 2],
-            IB20Asset::MultiplierUpdateCancelled {
+            events[events.len() - 3],
+            IB20Asset::UIMultiplierUpdateCancelled {
                 cancelledMultiplier: pending,
                 cancelledEffectiveAt: pending_effective_at,
             }
             .encode_log_data()
+        );
+        assert_eq!(
+            events[events.len() - 2],
+            IB20Asset::MultiplierUpdated { multiplier: instant }.encode_log_data()
         );
         assert_eq!(
             events[events.len() - 1],
@@ -2394,7 +2435,7 @@ mod tests {
         let mut tok = token();
         let matured = wad() * U256::from(2u64);
         set_now(&mut tok, U256::from(1u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, matured, U256::from(100u64), true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, matured, U256::from(100u64), true).unwrap();
 
         let now = U256::from(150u64); // matured
         let instant = wad() * U256::from(5u64);
@@ -2412,10 +2453,15 @@ mod tests {
             }
             .encode_log_data()
         );
-        let cancelled_sig = IB20Asset::MultiplierUpdateCancelled::SIGNATURE_HASH;
+        let multiplier_updated_sig = IB20Asset::MultiplierUpdated::SIGNATURE_HASH;
+        let cancelled_sig = IB20Asset::UIMultiplierUpdateCancelled::SIGNATURE_HASH;
         assert!(
             !tok.accounting().events.iter().any(|log| log.topics()[0] == cancelled_sig),
             "no cancellation event for a matured pending"
+        );
+        assert!(
+            tok.accounting().events.iter().any(|log| log.topics()[0] == multiplier_updated_sig),
+            "instant updates must still emit the legacy multiplier event"
         );
         assert_eq!(LOGIC.effective_at(&tok).unwrap(), U256::ZERO);
     }
@@ -2436,7 +2482,7 @@ mod tests {
         let target = wad() * U256::from(2u64);
         let effective_at = U256::from(100u64);
         set_now(&mut tok, U256::from(1u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
 
         let now = U256::from(150u64);
         set_now(&mut tok, now);
@@ -2454,7 +2500,7 @@ mod tests {
         let target = wad() * U256::from(2u64);
         let effective_at = U256::from(100u64);
         set_now(&mut tok, U256::from(1u64));
-        LOGIC.set_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
+        LOGIC.update_ui_multiplier(&mut tok, ALICE, target, effective_at, true).unwrap();
 
         // Before maturity: 1:1.
         set_now(&mut tok, U256::from(50u64));
@@ -2467,6 +2513,8 @@ mod tests {
         set_now(&mut tok, U256::from(100u64));
         assert_eq!(LOGIC.to_scaled_balance(&tok, U256::from(10u64)).unwrap(), U256::from(20u64));
         assert_eq!(LOGIC.to_raw_balance(&tok, U256::from(20u64)).unwrap(), U256::from(10u64));
+        assert_eq!(LOGIC.to_ui_amount(&tok, U256::from(10u64)).unwrap(), U256::from(20u64));
+        assert_eq!(LOGIC.from_ui_amount(&tok, U256::from(20u64)).unwrap(), U256::from(10u64));
         assert_eq!(LOGIC.scaled_balance_of(&tok, ALICE).unwrap(), U256::from(200u64));
         assert_eq!(LOGIC.balance_of_ui(&tok, ALICE).unwrap(), U256::from(200u64));
         assert_eq!(LOGIC.total_supply_ui(&tok).unwrap(), U256::from(200u64));
@@ -2474,12 +2522,13 @@ mod tests {
 
     #[test]
     fn supports_interface_advertises_claimed_ids_only() {
-        // IERC165, IScaledUIAmount, IScaledUIAmountNewUIMultiplier, IScaledUIAmountBalances.
+        // IERC165 plus the four ERC-8056 interface IDs.
         for id in [
             [0x01, 0xff, 0xc9, 0xa7],
             [0xa6, 0x0b, 0xf1, 0x3d],
             [0x4b, 0xd2, 0x76, 0x48],
             [0xd8, 0x90, 0xfd, 0x71],
+            [0x57, 0x85, 0x4f, 0xc3],
         ] {
             assert!(
                 <AssetV2 as Asset<FakeAccounting, FakePolicyAccounting>>::supports_interface(
@@ -2489,8 +2538,7 @@ mod tests {
                 .unwrap()
             );
         }
-        // Conversion extension is NOT claimed; nor is an arbitrary id.
-        for id in [[0x57, 0x85, 0x4f, 0xc3], [0xde, 0xad, 0xbe, 0xef], [0xff, 0xff, 0xff, 0xff]] {
+        for id in [[0xde, 0xad, 0xbe, 0xef], [0xff, 0xff, 0xff, 0xff]] {
             assert!(
                 !<AssetV2 as Asset<FakeAccounting, FakePolicyAccounting>>::supports_interface(
                     &LOGIC,

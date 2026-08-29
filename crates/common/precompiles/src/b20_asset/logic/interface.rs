@@ -384,6 +384,11 @@ pub trait Asset<S: AssetAccounting, A: PolicyAccounting> {
 
     // --- ERC-8056 scheduled multiplier (introduced at `AssetV2`, Cobalt) ---
 
+    /// Maximum accepted UI multiplier: `type(uint128).max`.
+    fn max_ui_multiplier(&self) -> Result<U256> {
+        reject_frozen_selector!()
+    }
+
     /// Returns the effective multiplier.
     fn effective_multiplier(&self, _token: &B20AssetToken<S, A>) -> Result<U256> {
         reject_frozen_selector!()
@@ -414,8 +419,18 @@ pub trait Asset<S: AssetAccounting, A: PolicyAccounting> {
         reject_frozen_selector!()
     }
 
+    /// ERC-8056 Conversion extension `toUIAmount()`.
+    fn to_ui_amount(&self, _token: &B20AssetToken<S, A>, _raw_amount: U256) -> Result<U256> {
+        reject_frozen_selector!()
+    }
+
+    /// ERC-8056 Conversion extension `fromUIAmount()`.
+    fn from_ui_amount(&self, _token: &B20AssetToken<S, A>, _ui_amount: U256) -> Result<U256> {
+        reject_frozen_selector!()
+    }
+
     /// Schedules a multiplier update.
-    fn set_ui_multiplier(
+    fn update_ui_multiplier(
         &self,
         _token: &mut B20AssetToken<S, A>,
         _caller: Address,
@@ -427,7 +442,7 @@ pub trait Asset<S: AssetAccounting, A: PolicyAccounting> {
     }
 
     /// Cancels a scheduled multiplier update.
-    fn cancel_scheduled_multiplier(
+    fn cancel_ui_multiplier_update(
         &self,
         _token: &mut B20AssetToken<S, A>,
         _caller: Address,
