@@ -2212,8 +2212,9 @@ mod tests {
     fn update_ui_multiplier_requires_operator_role() {
         let mut tok = token();
         set_now(&mut tok, U256::from(1u64));
-        let err =
-            LOGIC.update_ui_multiplier(&mut tok, ALICE, wad(), U256::from(2u64), false).unwrap_err();
+        let err = LOGIC
+            .update_ui_multiplier(&mut tok, ALICE, wad(), U256::from(2u64), false)
+            .unwrap_err();
         assert_eq!(
             err,
             BasePrecompileError::revert(IB20::AccessControlUnauthorizedAccount {
@@ -2236,8 +2237,9 @@ mod tests {
         assert_eq!(zero, BasePrecompileError::revert(IB20Asset::InvalidMultiplier {}));
 
         let too_big = U256::from(u128::MAX) + U256::ONE;
-        let over =
-            LOGIC.update_ui_multiplier(&mut tok, ALICE, too_big, U256::from(2u64), true).unwrap_err();
+        let over = LOGIC
+            .update_ui_multiplier(&mut tok, ALICE, too_big, U256::from(2u64), true)
+            .unwrap_err();
         assert_eq!(over, BasePrecompileError::revert(IB20Asset::InvalidMultiplier {}));
     }
 
@@ -2267,7 +2269,13 @@ mod tests {
         let first_effective_at = U256::from(1_000u64);
         set_now(&mut tok, U256::from(1u64));
         LOGIC
-            .update_ui_multiplier(&mut tok, ALICE, wad() * U256::from(2u64), first_effective_at, true)
+            .update_ui_multiplier(
+                &mut tok,
+                ALICE,
+                wad() * U256::from(2u64),
+                first_effective_at,
+                true,
+            )
             .unwrap();
         let err = LOGIC
             .update_ui_multiplier(
