@@ -425,7 +425,7 @@ pub trait Asset<S: AssetAccounting, A: PolicyAccounting> {
     }
 
     /// ERC-8056 Conversion extension `fromUIAmount()`.
-    fn from_ui_amount(&self, _token: &B20AssetToken<S, A>, _ui_amount: U256) -> Result<U256> {
+    fn ui_amount_to_raw(&self, _token: &B20AssetToken<S, A>, _ui_amount: U256) -> Result<U256> {
         reject_frozen_selector!()
     }
 
