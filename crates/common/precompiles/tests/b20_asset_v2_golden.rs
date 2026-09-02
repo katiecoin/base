@@ -2905,10 +2905,7 @@ fn golden_announce_emits_and_runs_internal_calls() {
         }
         .encode_log_data()
     );
-    assert_eq!(
-        events[events.len() - 3].topics()[0],
-        IB20Asset::MultiplierUpdated::SIGNATURE_HASH
-    );
+    assert_eq!(events[events.len() - 3].topics()[0], IB20Asset::MultiplierUpdated::SIGNATURE_HASH);
     assert_eq!(
         events[events.len() - 2].topics()[0],
         IB20Asset::UIMultiplierUpdated::SIGNATURE_HASH
