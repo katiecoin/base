@@ -947,11 +947,11 @@ impl<S: AssetAccounting, A: PolicyAccounting> Asset<S, A> for AssetV2 {
         Ok(product / B20AssetStorage::WAD)
     }
 
-    fn to_ui_amount(&self, token: &B20AssetToken<S, A>, raw_amount: U256) -> Result<U256> {
+    fn ui_amount_from_raw(&self, token: &B20AssetToken<S, A>, raw_amount: U256) -> Result<U256> {
         self.to_scaled_balance(token, raw_amount)
     }
 
-    fn from_ui_amount(&self, token: &B20AssetToken<S, A>, ui_amount: U256) -> Result<U256> {
+    fn raw_amount_from_ui(&self, token: &B20AssetToken<S, A>, ui_amount: U256) -> Result<U256> {
         self.to_raw_balance(token, ui_amount)
     }
 
@@ -2513,8 +2513,8 @@ mod tests {
         set_now(&mut tok, U256::from(100u64));
         assert_eq!(LOGIC.to_scaled_balance(&tok, U256::from(10u64)).unwrap(), U256::from(20u64));
         assert_eq!(LOGIC.to_raw_balance(&tok, U256::from(20u64)).unwrap(), U256::from(10u64));
-        assert_eq!(LOGIC.to_ui_amount(&tok, U256::from(10u64)).unwrap(), U256::from(20u64));
-        assert_eq!(LOGIC.from_ui_amount(&tok, U256::from(20u64)).unwrap(), U256::from(10u64));
+        assert_eq!(LOGIC.ui_amount_from_raw(&tok, U256::from(10u64)).unwrap(), U256::from(20u64));
+        assert_eq!(LOGIC.raw_amount_from_ui(&tok, U256::from(20u64)).unwrap(), U256::from(10u64));
         assert_eq!(LOGIC.scaled_balance_of(&tok, ALICE).unwrap(), U256::from(200u64));
         assert_eq!(LOGIC.balance_of_ui(&tok, ALICE).unwrap(), U256::from(200u64));
         assert_eq!(LOGIC.total_supply_ui(&tok).unwrap(), U256::from(200u64));

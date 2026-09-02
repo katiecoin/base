@@ -360,8 +360,8 @@ impl<S: AssetAccounting, A: PolicyAccounting> B20AssetToken<S, A> {
             SC::scaledBalanceOf(c) => logic.scaled_balance_of(self, c.account)?.abi_encode().into(),
             SC::balanceOfUI(c) => logic.balance_of_ui(self, c.account)?.abi_encode().into(),
             SC::totalSupplyUI(_) => logic.total_supply_ui(self)?.abi_encode().into(),
-            SC::toUIAmount(c) => logic.to_ui_amount(self, c.rawAmount)?.abi_encode().into(),
-            SC::fromUIAmount(c) => logic.from_ui_amount(self, c.uiAmount)?.abi_encode().into(),
+            SC::toUIAmount(c) => logic.ui_amount_from_raw(self, c.rawAmount)?.abi_encode().into(),
+            SC::fromUIAmount(c) => logic.raw_amount_from_ui(self, c.uiAmount)?.abi_encode().into(),
 
             // --- ERC-165 ---
             SC::supportsInterface(c) => {
