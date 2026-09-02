@@ -165,8 +165,7 @@ jobs:
 
   test:
     name: Test
-    runs-on:
-      group: BasePerfRunnerGroup
+    runs-on: ubuntu-latest
     env:
       BASE_REF: ${{ inputs.base_ref }}
     steps:
