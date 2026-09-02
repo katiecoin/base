@@ -15,10 +15,11 @@ use alloy_sol_types::sol;
 pub const ERC165_INTERFACE_ID: FixedBytes<4> = FixedBytes::new([0x01, 0xff, 0xc9, 0xa7]);
 
 /// The ERC-8056 interface IDs advertised by `supportsInterface` from `AssetV2`.
-pub const ERC8056_INTERFACE_IDS: [FixedBytes<4>; 3] = [
+pub const ERC8056_INTERFACE_IDS: [FixedBytes<4>; 4] = [
     FixedBytes::new([0xa6, 0x0b, 0xf1, 0x3d]),
     FixedBytes::new([0x4b, 0xd2, 0x76, 0x48]),
     FixedBytes::new([0xd8, 0x90, 0xfd, 0x71]),
+    FixedBytes::new([0x57, 0x85, 0x4f, 0xc3]),
 ];
 
 sol! {
@@ -32,21 +33,21 @@ sol! {
         /// `updateExtraMetadata` was called with an empty metadata key.
         error InvalidMetadataKey();
 
-        /// A multiplier setter (`setUIMultiplier` / `updateMultiplier`) was called with a
+        /// A multiplier setter (`updateUIMultiplier` / `updateMultiplier`) was called with a
         /// multiplier of zero or above the `type(uint128).max` overflow guard.
         error InvalidMultiplier();
 
-        /// [V2] `setUIMultiplier` was called with an `effectiveAt` that is not in the future
+        /// [V2] `updateUIMultiplier` was called with an `effectiveAt` that is not in the future
         error EffectiveAtInPast(uint256 effectiveAt);
 
-        /// [V2] `setUIMultiplier` was called with an `effectiveAt` beyond the `uint64` field range
+        /// [V2] `updateUIMultiplier` was called with an `effectiveAt` beyond the `uint64` field range
         error EffectiveAtTooFar(uint256 effectiveAt);
 
-        /// [V2] `setUIMultiplier` was called while a live pending update already exists.
-        error ScheduleOverlap(uint256 pendingEffectiveAt);
+        /// [V2] `updateUIMultiplier` was called while a live pending update already exists.
+        error UIMultiplierUpdateExists(uint256 effectiveAt);
 
-        /// [V2] `cancelScheduledMultiplier` was called when there is no live pending update.
-        error NoScheduledMultiplier();
+        /// [V2] `cancelUIMultiplierUpdate` was called when there is no live pending update.
+        error UIMultiplierUpdateDoesNotExist();
 
         /// A batched function was called with parallel arrays of differing lengths.
         error LengthMismatch(uint256 leftLen, uint256 rightLen);
@@ -69,12 +70,12 @@ sol! {
         /// scheduled-multiplier version `AssetV2` emits `UIMultiplierUpdated` instead.
         event MultiplierUpdated(uint256 multiplier);
 
-        /// [V2] ERC-8056; emitted by `setUIMultiplier` and `updateMultiplier`.
+        /// [V2] ERC-8056; emitted by `updateUIMultiplier` and `updateMultiplier`.
         event UIMultiplierUpdated(uint256 oldMultiplier, uint256 newMultiplier, uint256 effectiveAtTimestamp);
 
-        /// [V2] Emitted by `cancelScheduledMultiplier`, and by `updateMultiplier` when it clears
+        /// [V2] Emitted by `cancelUIMultiplierUpdate`, and by `updateMultiplier` when it clears
         /// a live pending update.
-        event MultiplierUpdateCancelled(uint256 cancelledMultiplier, uint256 cancelledEffectiveAt);
+        event UIMultiplierUpdateCancelled(uint256 cancelledMultiplier, uint256 cancelledEffectiveAt);
 
         /// Emitted by `updateExtraMetadata`. Empty `value` indicates removal.
         event ExtraMetadataUpdated(string key, string value);
@@ -92,6 +93,9 @@ sol! {
 
         /// Fixed-point precision for `multiplier`: `1e18` (one WAD).
         function WAD_PRECISION() external view returns (uint256);
+
+        /// Maximum accepted UI multiplier: `type(uint128).max`.
+        function MAX_UI_MULTIPLIER() external view returns (uint256);
 
 
         // ── Announcements ────────────────────────────────────────────────────
@@ -137,12 +141,18 @@ sol! {
         /// [V2] ERC-8056 Balances extension: `totalSupply() * multiplier() / WAD_PRECISION`.
         function totalSupplyUI() external view returns (uint256);
 
+        /// [V2] ERC-8056 Conversion extension: `rawAmount * multiplier() / WAD_PRECISION`.
+        function toUIAmount(uint256 rawAmount) external view returns (uint256);
+
+        /// [V2] ERC-8056 Conversion extension: `uiAmount * WAD_PRECISION / multiplier()`.
+        function fromUIAmount(uint256 uiAmount) external view returns (uint256 rawAmount);
+
         /// [V2] Schedules a single multiplier update effective at `effectiveAt`.
         /// The standard corporate-action path; requires `OPERATOR_ROLE`.
-        function setUIMultiplier(uint256 newMultiplier, uint256 effectiveAt) external;
+        function updateUIMultiplier(uint256 newMultiplier, uint256 effectiveAt) external;
 
         /// [V2] Cancels the single live pending update, restoring the no-pending state.
-        function cancelScheduledMultiplier() external;
+        function cancelUIMultiplierUpdate() external;
 
         /// Instant failsafe: sets the current multiplier immediately and clears any pending.
         /// At `AssetV1` emits `MultiplierUpdated` which was replaced in `AssetV2` by `UIMultiplierUpdated`
@@ -175,6 +185,7 @@ impl IB20Asset::IB20AssetCalls {
         match self {
             Self::OPERATOR_ROLE(_) => "precompile-b20-asset-OPERATOR_ROLE",
             Self::WAD_PRECISION(_) => "precompile-b20-asset-WAD_PRECISION",
+            Self::MAX_UI_MULTIPLIER(_) => "precompile-b20-asset-MAX_UI_MULTIPLIER",
             Self::announce(_) => "precompile-b20-asset-announce",
             Self::isAnnouncementIdUsed(_) => "precompile-b20-asset-isAnnouncementIdUsed",
             Self::multiplier(_) => "precompile-b20-asset-multiplier",
@@ -186,8 +197,10 @@ impl IB20Asset::IB20AssetCalls {
             Self::scaledBalanceOf(_) => "precompile-b20-asset-scaledBalanceOf",
             Self::balanceOfUI(_) => "precompile-b20-asset-balanceOfUI",
             Self::totalSupplyUI(_) => "precompile-b20-asset-totalSupplyUI",
-            Self::setUIMultiplier(_) => "precompile-b20-asset-setUIMultiplier",
-            Self::cancelScheduledMultiplier(_) => "precompile-b20-asset-cancelScheduledMultiplier",
+            Self::toUIAmount(_) => "precompile-b20-asset-toUIAmount",
+            Self::fromUIAmount(_) => "precompile-b20-asset-fromUIAmount",
+            Self::updateUIMultiplier(_) => "precompile-b20-asset-updateUIMultiplier",
+            Self::cancelUIMultiplierUpdate(_) => "precompile-b20-asset-cancelUIMultiplierUpdate",
             Self::updateMultiplier(_) => "precompile-b20-asset-updateMultiplier",
             Self::supportsInterface(_) => "precompile-b20-asset-supportsInterface",
             Self::batchMint(_) => "precompile-b20-asset-batchMint",
@@ -212,7 +225,7 @@ mod tests {
 
     /// Absolute wire fingerprint for Cobalt's (canonical) surface.
     const V2_ABI_FINGERPRINT: B256 =
-        b256!("93c921285631a963f969f6c6541689d116fc1046050ea82f889d6a5d833e8026");
+        b256!("691ec59a8cf08af7730fa6a98c1fcc71ad6a5bfb2b563540b323e644169f034d");
 
     /// `IB20Asset` declares no enum, so this surface passes `0` for the count and no ordinals to
     /// [`AbiFingerprint`] — there is no discriminant here that escapes the ABI the way the
@@ -323,12 +336,16 @@ mod tests {
             ERC8056_INTERFACE_IDS[2],
             xor(&[IB20Asset::balanceOfUICall::SELECTOR, IB20Asset::totalSupplyUICall::SELECTOR,])
         );
+        // IScaledUIAmountConversion = toUIAmount(uint256) ^ fromUIAmount(uint256).
+        assert_eq!(
+            ERC8056_INTERFACE_IDS[3],
+            xor(&[IB20Asset::toUIAmountCall::SELECTOR, IB20Asset::fromUIAmountCall::SELECTOR,])
+        );
     }
 
-    /// The Conversion extension id (`0x57854fc3`) must NOT be advertised.
     #[test]
-    fn erc8056_conversion_extension_not_claimed() {
-        assert!(!ERC8056_INTERFACE_IDS.contains(&FixedBytes::new([0x57, 0x85, 0x4f, 0xc3])));
+    fn erc8056_conversion_extension_is_claimed() {
+        assert!(ERC8056_INTERFACE_IDS.contains(&FixedBytes::new([0x57, 0x85, 0x4f, 0xc3])));
     }
 
     #[test]
@@ -367,9 +384,9 @@ mod tests {
         assert_eq!(IB20Asset::IB20AssetCalls::NAME, "IB20AssetCalls");
     }
 
-    /// The exact selector set dialable at Cobalt (the 12 Beryl selectors plus the 8 ERC-8056
-    /// scheduled-multiplier selectors). Adding or removing one changes which calls historical
-    /// blocks could make.
+    /// The exact selector set dialable at Cobalt (the 12 Beryl selectors plus the 11
+    /// ERC-8056/compatibility selectors added for the scheduled-multiplier surface). Adding or
+    /// removing one changes which calls historical blocks could make.
     #[test]
     fn selector_set_is_frozen() {
         let mut selectors: Vec<[u8; 4]> = IB20Asset::IB20AssetCalls::selectors().collect();
@@ -378,6 +395,7 @@ mod tests {
         let mut expected: Vec<[u8; 4]> = alloc::vec![
             IB20Asset::OPERATOR_ROLECall::SELECTOR,
             IB20Asset::WAD_PRECISIONCall::SELECTOR,
+            IB20Asset::MAX_UI_MULTIPLIERCall::SELECTOR,
             IB20Asset::announceCall::SELECTOR,
             IB20Asset::isAnnouncementIdUsedCall::SELECTOR,
             IB20Asset::multiplierCall::SELECTOR,
@@ -393,13 +411,15 @@ mod tests {
             IB20Asset::effectiveAtCall::SELECTOR,
             IB20Asset::balanceOfUICall::SELECTOR,
             IB20Asset::totalSupplyUICall::SELECTOR,
-            IB20Asset::setUIMultiplierCall::SELECTOR,
-            IB20Asset::cancelScheduledMultiplierCall::SELECTOR,
+            IB20Asset::toUIAmountCall::SELECTOR,
+            IB20Asset::fromUIAmountCall::SELECTOR,
+            IB20Asset::updateUIMultiplierCall::SELECTOR,
+            IB20Asset::cancelUIMultiplierUpdateCall::SELECTOR,
             IB20Asset::supportsInterfaceCall::SELECTOR,
         ];
         expected.sort_unstable();
 
-        assert_eq!(selectors.len(), 20);
+        assert_eq!(selectors.len(), 23);
         assert_eq!(selectors, expected);
     }
 }

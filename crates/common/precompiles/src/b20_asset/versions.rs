@@ -272,8 +272,8 @@ mod tests {
     }
 
     /// The dispatcher re-decodes against the canonical surface after a frozen surface accepts, so
-    /// every frozen selector must exist on canonical. The difference is exactly the 8 ERC-8056
-    /// scheduled-multiplier selectors Cobalt introduced.
+    /// every frozen selector must exist on canonical. The difference is exactly the 11 ERC-8056
+    /// / compatibility selectors Cobalt introduced.
     #[test]
     fn v1_selectors_are_a_subset_of_v2() {
         let v1: Vec<[u8; 4]> = IB20AssetV1::IB20AssetCalls::selectors().collect();
@@ -287,15 +287,18 @@ mod tests {
         let added: Vec<[u8; 4]> = IB20AssetV2::IB20AssetCalls::selectors()
             .filter(|selector| !AssetAbi::V1.valid_selector(*selector))
             .collect();
-        assert_eq!(added.len(), 8);
+        assert_eq!(added.len(), 11);
         for selector in [
+            IB20Asset::MAX_UI_MULTIPLIERCall::SELECTOR,
             IB20Asset::uiMultiplierCall::SELECTOR,
             IB20Asset::newUIMultiplierCall::SELECTOR,
             IB20Asset::effectiveAtCall::SELECTOR,
             IB20Asset::balanceOfUICall::SELECTOR,
             IB20Asset::totalSupplyUICall::SELECTOR,
-            IB20Asset::setUIMultiplierCall::SELECTOR,
-            IB20Asset::cancelScheduledMultiplierCall::SELECTOR,
+            IB20Asset::toUIAmountCall::SELECTOR,
+            IB20Asset::fromUIAmountCall::SELECTOR,
+            IB20Asset::updateUIMultiplierCall::SELECTOR,
+            IB20Asset::cancelUIMultiplierUpdateCall::SELECTOR,
             IB20Asset::supportsInterfaceCall::SELECTOR,
         ] {
             assert!(
@@ -376,8 +379,8 @@ mod tests {
 
     #[test]
     fn decode_malformed_known_asset_call_does_not_fall_through_to_common() {
-        // Truncated `setUIMultiplier` args: V2 owns the selector, so failure stays on asset.
-        let mut calldata = IB20Asset::setUIMultiplierCall::SELECTOR.to_vec();
+        // Truncated `updateUIMultiplier` args: V2 owns the selector, so failure stays on asset.
+        let mut calldata = IB20Asset::updateUIMultiplierCall::SELECTOR.to_vec();
         calldata.extend_from_slice(&[0u8; 8]);
         let err = AssetVersion::V2.abi().decode(&calldata).unwrap_err();
         assert!(matches!(
@@ -385,7 +388,7 @@ mod tests {
             BasePrecompileError::AbiDecodeFailed {
                 selector,
                 ..
-            } if selector == IB20Asset::setUIMultiplierCall::SELECTOR
+            } if selector == IB20Asset::updateUIMultiplierCall::SELECTOR
         ));
     }
 

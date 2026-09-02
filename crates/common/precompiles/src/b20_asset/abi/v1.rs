@@ -157,15 +157,18 @@ mod tests {
     /// `UnknownFunctionSelector` at V1, replacing the hand-written fork gate in `route`.
     #[test]
     fn asset_surface_excludes_scheduled_selectors() {
-        // The 8 V2-only selectors are named against the canonical (V2) surface via the crate root.
+        // The 11 V2-only selectors are named against the canonical (V2) surface via the crate root.
         for selector in [
+            crate::IB20Asset::MAX_UI_MULTIPLIERCall::SELECTOR,
             crate::IB20Asset::uiMultiplierCall::SELECTOR,
             crate::IB20Asset::newUIMultiplierCall::SELECTOR,
             crate::IB20Asset::effectiveAtCall::SELECTOR,
             crate::IB20Asset::balanceOfUICall::SELECTOR,
             crate::IB20Asset::totalSupplyUICall::SELECTOR,
-            crate::IB20Asset::setUIMultiplierCall::SELECTOR,
-            crate::IB20Asset::cancelScheduledMultiplierCall::SELECTOR,
+            crate::IB20Asset::toUIAmountCall::SELECTOR,
+            crate::IB20Asset::fromUIAmountCall::SELECTOR,
+            crate::IB20Asset::updateUIMultiplierCall::SELECTOR,
+            crate::IB20Asset::cancelUIMultiplierUpdateCall::SELECTOR,
             crate::IB20Asset::supportsInterfaceCall::SELECTOR,
         ] {
             assert!(
