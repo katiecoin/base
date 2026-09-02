@@ -21,8 +21,7 @@ permissions:
 jobs:
   fork-tests:
     name: Base Std Interface Tests (${{ matrix.fork }})
-    runs-on:
-      group: BasePerfRunnerGroup
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
